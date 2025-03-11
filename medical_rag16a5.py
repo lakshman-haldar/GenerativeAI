@@ -24,6 +24,8 @@ from io import BytesIO
 from tempfile import NamedTemporaryFile
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import OpenAIEmbeddings
+from sklearn.metrics.pairwise import cosine_similarity
+
 
 # Initialize OpenAI client
 client = openai.OpenAI()
@@ -236,12 +238,13 @@ prompt_template = PromptTemplate(
 )
 
 
-# Answer generation function
+# Answer generation function with Semantic Analysis
+# Fix: Ensure generate_answer returns 3 values
 def generate_answer(query, retriever):
     start_time = time.time()
     retrieved_docs = retriever.invoke(query)
     context = "\n".join([doc.page_content for doc in retrieved_docs[:3]]) if retrieved_docs else ""
-    
+
     # Ensure correct model selection
     if fine_tuned_model in model_mapping:
         selected_model = model_mapping[fine_tuned_model]
@@ -250,8 +253,9 @@ def generate_answer(query, retriever):
     else:
         selected_model = "gpt-4-turbo"  # Default fallback
 
-    # Generate response based on selected model
-    if selected_model.startswith("gpt-4"):  # GPT-4 Turbo or OpenAI models
+    selected_model = model_mapping.get(fine_tuned_model, model_mapping.get(base_model, "gpt-4-turbo"))
+
+    if selected_model.startswith("gpt-4"):
         response = client.chat.completions.create(
             model=selected_model,
             messages=[
@@ -260,25 +264,17 @@ def generate_answer(query, retriever):
             ]
         )
         answer = response.choices[0].message.content
-    
-    elif selected_model.startswith("google"):  # Google Gemini Models
-        response = client.chat.completions.create(
-            model=selected_model,
-            messages=[
-                {"role": "system", "content": "You are an AI providing insightful answers."},
-                {"role": "user", "content": prompt_template.format(context=context, question=query)}
-            ]
-        )
-        answer = response.choices[0].message.content
-    
     elif selected_model in ["dmis-lab/biobert-base-cased-v1.1", "deepseek-ai/deepseek-llm-7b", "meta-llama/Llama-2-7b-chat-hf"]:
         medical_qa_pipeline = pipeline("text-generation", model=selected_model)
         answer = medical_qa_pipeline(f"Context: {context}\nQuestion: {query}", max_length=300)[0]['generated_text']
-    
     else:
         answer = "Error: Selected model is not supported for this query."
+
+    # Fix: Compute semantic similarity
+    semantic_score = compute_semantic_similarity(context, answer)
+
+    return answer, time.time() - start_time, semantic_score  # ✅ Now returns 3 values
     
-    return answer, time.time() - start_time
 
 # Evaluation Metrics Functions
 def calculate_bleu(reference, hypothesis):
@@ -326,18 +322,43 @@ def check_contradiction(context, answer):
     contradiction_score = probs[0][0].item()  # Probability of contradiction
     return contradiction_score
 
+# Function to compute semantic similarity
+def compute_semantic_similarity(context, answer):
+    if not context or not answer:
+        return 0.0  # Return 0 if either is missing
+    
+    embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-# Streamlit Input Section 
-query = st.text_input("Enter your  question:") 
-if st.button("Generate Answer"): 
-    if query.strip(): 
-        with st.spinner("Generating response..."): 
-            response, proc_time = generate_answer(query, retriever) 
-            st.success("Answer:") 
-            st.write(response) 
+    context_embedding = embedding_model.embed_documents([context])[0]
+    answer_embedding = embedding_model.embed_documents([answer])[0]
+
+    similarity_score = cosine_similarity(
+        np.array(context_embedding).reshape(1, -1),
+        np.array(answer_embedding).reshape(1, -1)
+    )[0][0]
+
+    return round(similarity_score, 4)
+
+
+ # Compute semantic similarity
+    semantic_score = compute_semantic_similarity(context, answer)
+
+    return answer, time.time() - start_time, semantic_score
+
+query = st.text_input("Enter your question:")
+if st.button("Generate Answer"):
+    if query.strip():
+        with st.spinner("Generating response..."):
+            response, proc_time, semantic_score = generate_answer(query, retriever)  # ✅ Now correctly receives 3 values
+            st.success("Answer:")
+            st.write(response)
             st.sidebar.write(f"Processing Time: {proc_time:.2f} sec")
-    else: 
+            st.sidebar.header("Semantic Analysis Score")
+            st.sidebar.write(f"**Semantic Similarity: {semantic_score:.4f}**")
+    else:
         st.warning("Please enter a valid question.")
+
+
         
     # Evaluation Metrics
     reference = "Expected medical answer based on ground truth data."
@@ -394,3 +415,8 @@ if st.button("Generate Answer"):
 else:
     st.warning("Please enter a valid question.") 
 
+
+
+
+
+   
