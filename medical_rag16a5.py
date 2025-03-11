@@ -35,7 +35,9 @@ st.set_page_config(page_title="RAG-based QA App", layout="wide")
 # Initialize OpenAI client
 openai.api_key = os.getenv("OPENAI_API_KEY")
 # Title and description
-st.title("Enhancing Contextual Response Generation for Generative AI with Retrieval-Augmented Large Language Models using LangChain")
+#st.title("Enhancing Contextual Response Generation for Generative AI with Retrieval-Augmented Large Language Models using LangChain")
+st.markdown("<h2 style='text-align: center;'>Enhancing Contextual Response Generation for Generative AI with Retrieval-Augmented Large Language Models using LangChain</h3>", unsafe_allow_html=True)
+
 #st.subheader("Retrieval-Augmented Generation (RAG) App")
 #st.write("Ask a question, and the model will retrieve relevant context before generating an answer.")
 # Sidebar: Model Selection
@@ -57,8 +59,27 @@ data_sources = {
 }
 
 # Function to fetch documents (Placeholder function)
+#def fetch_documents(source):
+#    return [f"Data from {source}"]  # Replace with actual fetching logic
+
+# Function to fetch real documents
 def fetch_documents(source):
-    return [f"Data from {source}"]  # Replace with actual fetching logic
+    try:
+        response = requests.get(source, timeout=10)  # 10-second timeout
+        response.raise_for_status()  # Raise error if request fails
+        return [f"Data from {source}", response.text[:1000]] # Replace with actual fetching logic  # Return first 1000 characters
+    except requests.exceptions.RequestException as e:
+        return [f"Error fetching data from {source}: {e}"] 
+       
+
+# Fetch documents from the selected domain
+data_source = data_sources.get(domain, "https://commoncrawl.org/")
+docs = fetch_documents(data_source)
+
+# Display fetched data (debugging)
+print("Fetched Documents:", docs)
+
+
 
 # Fetch documents from the selected domain
 data_source = data_sources.get(domain, "https://commoncrawl.org/")
@@ -104,10 +125,19 @@ else:
 # Display selected model
 st.write("Selected Model:", model_name)
 
-# Text splitting
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+# Sidebar: Temperature Selection
+st.sidebar.header("Fine-Tuning Parameters")
+temperature = st.sidebar.slider("Select Temperature (Randomness)", 0.0, 1.5, 0.7, step=0.1)
 
-#text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+# Sidebar: Input Parameters for Text Splitting
+st.sidebar.header("Text Splitting Parameters")
+chunk_size = st.sidebar.slider("Select Chunk Size", min_value=100, max_value=2000, value=500, step=100)
+chunk_overlap = st.sidebar.slider("Select Chunk Overlap", min_value=0, max_value=500, value=50, step=10)
+
+# Text splitting
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+
+#text_splitter = CharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 documents = text_splitter.create_documents(docs)
 
 # Load embedding model
@@ -178,7 +208,7 @@ else:
 
 # Text Splitting for RAG Processing
 if documents:
-    text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    text_splitter = CharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     split_docs = text_splitter.split_documents(documents)
     #print(f"Number of split documents: {len(split_docs)}")
     st.sidebar.write(f"Number of split documents: {len(split_docs)}")
@@ -258,15 +288,17 @@ def generate_answer(query, retriever):
     if selected_model.startswith("gpt-4"):
         response = client.chat.completions.create(
             model=selected_model,
+            temperature=temperature,  # 🔹 Fine-tune randomness
             messages=[
                 {"role": "system", "content": "You are a medical assistant providing evidence-based answers."},
                 {"role": "user", "content": prompt_template.format(context=context, question=query)}
             ]
         )
         answer = response.choices[0].message.content
+
     elif selected_model in ["dmis-lab/biobert-base-cased-v1.1", "deepseek-ai/deepseek-llm-7b", "meta-llama/Llama-2-7b-chat-hf"]:
         medical_qa_pipeline = pipeline("text-generation", model=selected_model)
-        answer = medical_qa_pipeline(f"Context: {context}\nQuestion: {query}", max_length=300)[0]['generated_text']
+        answer = medical_qa_pipeline(f"Context: {context}\nQuestion: {query}", max_length=300,temperature=temperature)[0]['generated_text']
     else:
         answer = "Error: Selected model is not supported for this query."
 
@@ -345,18 +377,19 @@ def compute_semantic_similarity(context, answer):
 
     return answer, time.time() - start_time, semantic_score
 
-query = st.text_input("Enter your question:")
+query = st.text_input("Please Enter your question ? :")
 if st.button("Generate Answer"):
     if query.strip():
-        with st.spinner("Generating response..."):
+        with st.spinner("Please Enter Generating response..."):
             response, proc_time, semantic_score = generate_answer(query, retriever)  # ✅ Now correctly receives 3 values
             st.success("Answer:")
             st.write(response)
             st.sidebar.write(f"Processing Time: {proc_time:.2f} sec")
+            st.sidebar.write(f"Temperature: {temperature:.2f}")  # 🔹 Display in sidebar
             st.sidebar.header("Semantic Analysis Score")
             st.sidebar.write(f"**Semantic Similarity: {semantic_score:.4f}**")
     else:
-        st.warning("Please enter a valid question.")
+        st.warning("Please enter a valid question to get proper answer.")
 
 
         
