@@ -1,3 +1,12 @@
+#Python Library Loading
+from sentence_transformers import SentenceTransformer, util
+import numpy as np
+import torch
+from transformers import pipeline
+import bert_score
+
+
+
 import os
 import time
 import streamlit as st
@@ -6,11 +15,11 @@ import requests
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
+import pinecone
+import faiss
 from datetime import datetime
-from sentence_transformers import SentenceTransformer
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
-#from langchain.embeddings import OpenAIEmbeddings
 from langchain_community.document_loaders import WebBaseLoader, PyPDFLoader, UnstructuredWordDocumentLoader, TextLoader, CSVLoader, UnstructuredExcelLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.chains import RetrievalQA
@@ -20,28 +29,30 @@ from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from rouge_score import rouge_scorer
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import train_test_split
-from io import BytesIO
 from tempfile import NamedTemporaryFile
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import OpenAIEmbeddings
 from sklearn.metrics.pairwise import cosine_similarity
-
-
+from sentence_transformers import SentenceTransformer
 # Initialize OpenAI client
 client = openai.OpenAI()
 
 # Streamlit page config
 st.set_page_config(page_title="RAG-based QA App", layout="wide")
+
 # Initialize OpenAI client
 openai.api_key = os.getenv("OPENAI_API_KEY")
+HUGGINGFACE_API_KEY=os.getenv("HUGGINGFACE_API_KEY")
+GOOGLE_GEMINI_API_KEY=os.getenv("GOOGLE_GEMINI_API_KEY")
+DEEPSEEK_API_KEY=os.getenv("DEEPSEEK_API_KEY")
+LLAMA_API_KEY=os.getenv("LLAMA_API_KEY")                
+LANGSMITH_API_KEY=os.getenv("LANGSMITH_API_KEY")
+PINCON_API_KEY=os.getenv("PINCONE_API_KEY")
+
 # Title and description
 #st.title("Enhancing Contextual Response Generation for Generative AI with Retrieval-Augmented Large Language Models using LangChain")
 st.markdown("<h2 style='text-align: center;'>Enhancing Contextual Response Generation for Generative AI with Retrieval-Augmented Large Language Models using LangChain</h3>", unsafe_allow_html=True)
 
-#st.subheader("Retrieval-Augmented Generation (RAG) App")
-#st.write("Ask a question, and the model will retrieve relevant context before generating an answer.")
-# Sidebar: Model Selection
-# Sidebar: Domain Selection (Ensure there's only one instance)
 st.sidebar.header("Domain Selection")
 domain = st.sidebar.selectbox("Select Domain:", ["All", "Medical", "Legal", "Finance", "Technology"], key="domain_selection")
 
@@ -51,47 +62,41 @@ st.write(f"Ask a {domain.lower()} question, and the model will retrieve relevant
 
 # Define data sources for each domain
 data_sources = {
-    "All": "https://commoncrawl.org/",
-    "Medical": "https://www.who.int/",
-    "Legal": "https://www.courtlistener.com/api/",
-    "Finance": "https://www.sec.gov/edgar.shtml",
-    "Technology": "https://arxiv.org/list/cs.AI/recent"
+    "All": "https://en.wikipedia.org/wiki", #"https://commoncrawl.org/", "https://www.kaggle.com/datasets", "https://www.data.gov/", "https://www.data.gov.in/",
+    "Medical": "https://www.who.int/", #"https://www.pubmed.ncbi.nlm.nih.gov/"],
+    "Legal": "https://www.freelaw.in/",#"https://www.legalserviceindia.com/"],
+    "Finance": "https://www.rbi.org.in/Scripts/Statistics.aspx", #"https://www.bseindia.com/"],
+    "Technology": "https://arxiv.org/list/cs.AI/recent", #"https://www.techradar.com/"]
 }
 
-# Function to fetch documents (Placeholder function)
-#def fetch_documents(source):
-#    return [f"Data from {source}"]  # Replace with actual fetching logic
-
-# Function to fetch real documents
+# Function to fetch real documents (Placeholder function)
 def fetch_documents(source):
     try:
         response = requests.get(source, timeout=10)  # 10-second timeout
         response.raise_for_status()  # Raise error if request fails
-        return [f"Data from {source}", response.text[:1000]] # Replace with actual fetching logic  # Return first 1000 characters
+        return [f"Data from {source}"]  # Replace with actual fetching logic
+        #return [f"Data from {source}", response.text[:500]] # Replace with actual fetching logic  # Return first 1000 characters
     except requests.exceptions.RequestException as e:
         return [f"Error fetching data from {source}: {e}"] 
        
 
 # Fetch documents from the selected domain
-data_source = data_sources.get(domain, "https://commoncrawl.org/")
+data_source = data_sources.get(domain, "https://en.wikipedia.org/wiki")
 docs = fetch_documents(data_source)
 
 # Display fetched data (debugging)
 print("Fetched Documents:", docs)
-
-
-
-# Fetch documents from the selected domain
-data_source = data_sources.get(domain, "https://commoncrawl.org/")
-docs = fetch_documents(data_source)
 
 # Handle case where no articles are found
 if not docs:
     st.error("No articles fetched. Check the data source.")
     st.stop()
 
+#st.write("### 🌍 Fetched Webpage Preview")
+#st.components.v1.iframe(data_source, height=600, scrolling=True)
+
 # Display fetched documents
-st.write("Fetched documents:")
+st.write("Fetched documents for Fine Tunning LLM :")
 st.write(docs)
 
 # Sidebar: Model Selection
@@ -107,7 +112,7 @@ model_mapping = {
     "DeepSeek-V3": "deepseek-ai/deepseek-llm-7b",
     "LLaMA": "meta-llama/Llama-2-7b-chat-hf",
     "Google Gemini": "google/gemini-pro",
-    "DeepSeek-R1": "deepseek-ai/deepseek-llm-7b",
+    "DeepSeek-R1": "deepseek-ai/DeepSeek-R1",
     "OpenAI": "gpt-4-turbo",
     "Hugging Face": "sentence-transformers/all-MiniLM-L6-v2"
 }
@@ -120,14 +125,18 @@ elif base_model in model_mapping:
 else:
     model_name = "gpt-4-turbo"  # Default fallback
 
-#model_name = model_mapping.get(fine_tuned_model, base_model)
+model_name = model_mapping.get(fine_tuned_model, base_model)
 
 # Display selected model
+st.write("Selected Base LLM Model:", base_model)
+st.write("Selected Fine-Tunned LLM Model:", fine_tuned_model)
+st.write("Selected Embedding Model:", embedding_model_name)
 st.write("Selected Model:", model_name)
+
 
 # Sidebar: Temperature Selection
 st.sidebar.header("Fine-Tuning Parameters")
-temperature = st.sidebar.slider("Select Temperature (Randomness)", 0.0, 1.5, 0.7, step=0.1)
+temperature = st.sidebar.slider("Select Temperature (Higher=more randomness, Lower=more focused)", 0.0, 1.5, 0.7, step=0.1)
 
 # Sidebar: Input Parameters for Text Splitting
 st.sidebar.header("Text Splitting Parameters")
@@ -140,17 +149,14 @@ text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_over
 #text_splitter = CharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 documents = text_splitter.create_documents(docs)
 
-# Load embedding model
-embedding_model = HuggingFaceEmbeddings(model_name=f"sentence-transformers/{embedding_model_name}")
-vectorstore = FAISS.from_documents(documents, embedding_model)
-retriever = vectorstore.as_retriever()
-st.write("Vector Store Retriever initialized successfully")
-
 
 # File Upload Section
 st.sidebar.header("Upload Documents for RAG Processing")
 uploaded_files = st.sidebar.file_uploader("Upload documents (PDF, DOCX, TXT,.CSV, or EXCEL)", type=["pdf", "docx", "txt",".csv","xlsx"], accept_multiple_files=True)
 
+################# Load Documents if Uploaded
+if uploaded_files:
+    st.sidebar.success(f"{len(uploaded_files)} file(s) uploaded.")
 
 # Function to process multiple uploaded files
 def process_uploaded_files(uploaded_files):
@@ -199,12 +205,8 @@ documents = process_uploaded_files(uploaded_files)
 if documents:
     st.sidebar.success(f"{len(uploaded_files)} file(s) uploaded and processed successfully.")
 else:
-    st.sidebar.warning("No documents uploaded. You can still enter a question manually.")
+    st.sidebar.warning("No document uploaded. You can still enter a question manually, Using LLM for direct responses..")
 
-if documents:
-    st.sidebar.success("File uploaded and processed successfully.")
-else:
-    st.sidebar.warning("No document uploaded. You can still enter a question manually.")
 
 # Text Splitting for RAG Processing
 if documents:
@@ -215,14 +217,17 @@ if documents:
 else:
     split_docs = []
 
-#---------------------------
-# Convert to FAISS Vector Store
-#vectorstore = FAISS.from_documents(docs, OpenAIEmbeddings())
-#vectorstore.save_local("faiss_index")
 
-#print("FAISS index created successfully!")
-#-----------------------------------------------
 
+# Load embedding model
+embedding_model = HuggingFaceEmbeddings(model_name=f"sentence-transformers/{embedding_model_name}")
+
+if documents:
+    vectorstore = FAISS.from_documents(documents, embedding_model)
+    retriever = vectorstore.as_retriever()
+    st.write("Vector Store Retriever initialized successfully")
+else:
+    st.error("No documents available for creating the vector store.")
 
 #--------------------
 print(f"Number of split documents: {len(split_docs)}")
@@ -242,24 +247,26 @@ else:
 
 #----------------------------------------------------
 if len(split_docs) == 0:
-    raise ValueError("No documents found for FAISS indexing!")
+    if not documents:
+        print("⚠️ No documents found. Skipping FAISS indexing.")
 
 embeddings = embedding_model.embed_documents([doc.page_content for doc in split_docs])
 
+
+if not split_docs or not embeddings:
+    print("⚠️ No valid documents or texts found. Skipping FAISS indexing.")
+    vectorstore = None
+    
+else:
+    vectorstore = FAISS.from_documents(split_docs, embedding_model)
+    st.sidebar.write("✅ FAISS index created successfully!")
+
+   
 if len(embeddings) == 0:
-    raise ValueError("No embeddings were generated!")
+    raise ValueError("Please upload documents for LLM Fine Tunning.") #No embeddings were generated!
 
-vectorstore = FAISS.from_documents(split_docs, embedding_model)
+#vectorstore = FAISS.from_documents(split_docs, embedding_model)
 
-#--------------------------------------------------------------------------
-
-
-# Load embedding model
-embedding_model = HuggingFaceEmbeddings(model_name=f"sentence-transformers/{embedding_model_name}")
-vectorstore = FAISS.from_documents(split_docs, embedding_model)
-retriever = vectorstore.as_retriever()
-# print(f"Embeddings generated: {len(embeddings)}")
-st.write("Retriever initialized successfully")
 
 # Define the retrieval-augmented prompt
 prompt_template = PromptTemplate(
@@ -290,13 +297,13 @@ def generate_answer(query, retriever):
             model=selected_model,
             temperature=temperature,  # 🔹 Fine-tune randomness
             messages=[
-                {"role": "system", "content": "You are a medical assistant providing evidence-based answers."},
+                {"role": "system", "content": "You are a domain assistant providing evidence-based answers."},
                 {"role": "user", "content": prompt_template.format(context=context, question=query)}
             ]
         )
         answer = response.choices[0].message.content
 
-    elif selected_model in ["dmis-lab/biobert-base-cased-v1.1", "deepseek-ai/deepseek-llm-7b", "meta-llama/Llama-2-7b-chat-hf"]:
+    elif selected_model in ["gpt-4-turbo","dmis-lab/biobert-base-cased-v1.1", "deepseek-ai/deepseek-llm-7b", "meta-llama/Llama-2-7b-chat-hf"]:
         medical_qa_pipeline = pipeline("text-generation", model=selected_model)
         answer = medical_qa_pipeline(f"Context: {context}\nQuestion: {query}", max_length=300,temperature=temperature)[0]['generated_text']
     else:
@@ -353,6 +360,76 @@ def check_contradiction(context, answer):
     
     contradiction_score = probs[0][0].item()  # Probability of contradiction
     return contradiction_score
+
+from sentence_transformers import SentenceTransformer, util
+import numpy as np
+import torch
+from transformers import pipeline
+import bert_score
+
+# Load pre-trained models
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')  # Sentence Embeddings
+nli_model = pipeline("text-classification", model="facebook/bart-large-mnli")  # NLI Model
+
+def check_hallucination_advanced(response, retrieved_contexts, sim_threshold=0.5, nli_threshold=0.7):
+    """
+    Detect hallucination using Cosine Similarity, BERTScore, and NLI.
+    
+    Parameters:
+    - response (str): Model-generated response
+    - retrieved_contexts (list of str): List of retrieved supporting facts
+    - sim_threshold (float): Cosine similarity threshold
+    - nli_threshold (float): Minimum probability for 'Entailment' to accept response
+
+    Returns:
+    - is_hallucination (bool): True if the response is likely hallucinated
+    - similarity_score (float): Max cosine similarity score
+    - entailment_score (float): Max entailment probability from NLI
+    - bert_score (float): Maximum semantic similarity from BERTScore
+    """
+
+    # Step 1: Compute Cosine Similarity
+    response_embedding = embedding_model.encode(response, convert_to_tensor=True)
+    context_embeddings = embedding_model.encode(retrieved_contexts, convert_to_tensor=True)
+    similarity_scores = util.pytorch_cos_sim(response_embedding, context_embeddings)
+    max_similarity = np.max(similarity_scores.numpy())
+
+    # Step 2: Compute BERTScore for each reference separately
+    bert_scores = []
+    for ref in retrieved_contexts:
+        P, R, F1 = bert_score.score([response], [ref], lang="en", rescale_with_baseline=True)
+        bert_scores.append(float(F1[0]))  # Extract scalar value
+    max_bert_score = max(bert_scores) if bert_scores else 0.0  # Avoid empty list error
+
+    # Step 3: Natural Language Inference (NLI)
+    entailment_scores = []
+    for context in retrieved_contexts:
+        result = nli_model(f"Hypothesis: {response} \nPremise: {context}")
+        entailment_prob = next((item['score'] for item in result if item['label'] == 'ENTAILMENT'), 0)
+        entailment_scores.append(entailment_prob)
+    
+    max_entailment = max(entailment_scores) if entailment_scores else 0.0
+
+    # Step 4: Flag Hallucination based on all criteria
+    is_hallucination = max_similarity < sim_threshold and max_entailment < nli_threshold and max_bert_score < 0.7
+
+    return is_hallucination, max_similarity, max_entailment, max_bert_score
+
+# Example Usage
+response = "The Eiffel Tower is located in Berlin."
+retrieved_contexts = [
+    "The Eiffel Tower is a famous landmark in Paris, France.",
+    "It was constructed in 1889 and is one of the most visited monuments in the world."
+]
+
+hallucination_flag, similarity, entailment, bert_score_val = check_hallucination_advanced(response, retrieved_contexts)
+
+print(f"Hallucination: {hallucination_flag}")
+print(f"Cosine Similarity: {similarity:.4f}")
+print(f"Entailment Score: {entailment:.4f}")
+print(f"BERTScore: {bert_score_val:.4f}")
+print(f"Hallucination: {hallucination_flag}, Similarity: {similarity}, Entailment: {entailment}, BERTScore: {bert_score_val}")
+
 
 # Function to compute semantic similarity
 def compute_semantic_similarity(context, answer):
@@ -428,23 +505,30 @@ if st.button("Generate Answer"):
 
     # Display Hallucination Metrics
 
-    # Format the numbers to display with more decimal places (e.g., 6 decimal places)
-   #formatted_fact_overlap = f"{fact_overlap_score:.6f}"
-    #formatted_contradiction = f"{contradiction_score:.6f}"
-
-#print(f"Hallucination Check\nFact Overlap Score: {formatted_fact_overlap}\nContradiction Score: {formatted_contradiction}")
-    st.sidebar.header("Hallucination Check")
+    st.sidebar.header("Hallucination Check Metrices")
+    st.sidebar.write(f"Hallucination: {hallucination_flag}")
+    st.sidebar.write(f"Entailment: {entailment:.6f}")
+    st.sidebar.write(f"Cosine Similarity: {similarity:.6f}")   
+    st.sidebar.write(f"BERTScore: {bert_score_val:.6f}")                  
     st.sidebar.write(f"Fact Overlap Score: {overlap_score:.6f}")
     st.sidebar.write(f"Contradiction Score: {contradiction_score:.6f}")
 
-    # Visualization
+
+    # Visualization - Cosine & BERT
     fig, ax = plt.subplots(figsize=(5, 3))
-    ax.bar(["Fact Overlap", "Contradiction"], [overlap_score, contradiction_score], color=['green', 'red'])
+    ax.bar(["Cosine Similarity","BERTScore"], [similarity,bert_score_val], color=['green', 'red',])
     ax.set_ylabel("Score")
     ax.set_title("Hallucination Metrics")
     st.sidebar.pyplot(fig)
 
-    st.sidebar.write(f"Processing Time: {proc_time:.2f} sec")
+# Visualization - Fact Overlap  & Contradiction, Entailment
+    fig, ax = plt.subplots(figsize=(5, 3))
+    ax.bar(["Fact Overlap", "Contradiction","Entailment"], [overlap_score, contradiction_score,entailment], color=['blue','purple','orange'])
+    ax.set_ylabel("Score")
+    st.sidebar.pyplot(fig)
+
+
+    #st.sidebar.write(f"Processing Time: {proc_time:.2f} sec")
 else:
     st.warning("Please enter a valid question.") 
 
