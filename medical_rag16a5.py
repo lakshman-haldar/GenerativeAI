@@ -1,5 +1,10 @@
 #Python Library Loading
 
+import nltk
+from nltk.corpus import wordnet, stopwords
+from nltk.tokenize import word_tokenize
+from nltk.stem import WordNetLemmatizer, PorterStemmer
+
 # Download resources if not already available
 nltk.download('punkt')
 nltk.download('wordnet')
@@ -15,10 +20,6 @@ from langchain.text_splitter import (
 )
 
 import streamlit as st
-import nltk
-from nltk.corpus import wordnet, stopwords
-from nltk.tokenize import word_tokenize
-from nltk.stem import WordNetLemmatizer, PorterStemmer
 from sentence_transformers import SentenceTransformer, util
 import numpy as np
 import torch
