@@ -1,8 +1,9 @@
 #Python Library Loading
+
 # Download resources if not already available
-#nltk.download('punkt')
-#nltk.download('wordnet')
-#nltk.download('stopwords')
+nltk.download('punkt')
+nltk.download('wordnet')
+nltk.download('stopwords')
 
 from langchain.text_splitter import (
     RecursiveCharacterTextSplitter,
